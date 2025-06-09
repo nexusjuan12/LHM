@@ -36,29 +36,26 @@ class VideoMotionProcessor:
             motion_name = "".join(c for c in motion_name if c.isalnum() or c in (' ', '-', '_')).strip()
             motion_name = motion_name.replace(' ', '_')
             
-            output_path = self.output_base_dir / motion_name
-            output_path.mkdir(exist_ok=True, parents=True)
+            progress(0.1, desc="Setting up processing...")
             
-            # Copy uploaded video to processing directory
-            video_path = output_path / "input_video.mp4"
-            shutil.copy2(video_file, video_path)
+            # Copy video to working directory (like our successful test)
+            working_video = Path("./1.mp4")
+            shutil.copy2(video_file, working_video)
             
-            progress(0.1, desc="Video uploaded, starting pose estimation...")
+            progress(0.2, desc="Running pose estimation...")
             
-            # Build the processing command
+            # Use the exact command structure that worked before
             cmd = [
                 "python", "./engine/pose_estimation/video2motion.py",
-                "--video_path", str(video_path),
-                "--output_path", str(output_path)
+                "--video_path", "1.mp4",
+                "--output_dir", "./test_motion_output/"
             ]
             
             # Add half-body parameters if specified
             if is_half_body:
                 cmd.extend(["--fitting_steps", "100", "0"])
             
-            progress(0.2, desc="Running pose estimation...")
-            
-            # Execute the command
+            # Execute the command in the correct directory
             result = subprocess.run(
                 cmd, 
                 capture_output=True, 
@@ -67,18 +64,51 @@ class VideoMotionProcessor:
                 timeout=600  # 10 minute timeout
             )
             
-            progress(0.8, desc="Processing complete, verifying output...")
+            progress(0.6, desc="Motion processing complete, organizing files...")
             
             # Check if processing was successful
-            smplx_params_path = output_path / "smplx_params"
-            if smplx_params_path.exists() and any(smplx_params_path.iterdir()):
-                progress(1.0, desc="✅ Motion extraction successful!")
-                return f"✅ Successfully processed '{motion_name}'\n📁 Motion saved to: {smplx_params_path}", self.get_processed_motions()
-            else:
-                error_msg = f"❌ Processing failed for '{motion_name}'"
+            temp_output = Path("./test_motion_output/1")
+            if not temp_output.exists() or not (temp_output / "smplx_params").exists():
+                error_msg = f"❌ Motion processing failed for '{motion_name}'"
                 if result.stderr:
                     error_msg += f"\n\nError details:\n{result.stderr}"
                 return error_msg, self.get_processed_motions()
+            
+            progress(0.8, desc="Setting up final motion folder...")
+            
+            # Create final motion directory
+            final_motion_dir = self.output_base_dir / motion_name
+            final_motion_dir.mkdir(exist_ok=True, parents=True)
+            
+            # Copy processed motion data to final location
+            if (final_motion_dir / "smplx_params").exists():
+                shutil.rmtree(final_motion_dir / "smplx_params")
+            shutil.copytree(temp_output / "smplx_params", final_motion_dir / "smplx_params")
+            
+            # Copy video files with correct names
+            shutil.copy2(working_video, final_motion_dir / "input_video.mp4")
+            shutil.copy2(working_video, final_motion_dir / "samurai_visualize.mp4")
+            
+            progress(0.9, desc="Cleaning up temporary files...")
+            
+            # Clean up temporary files
+            if working_video.exists():
+                working_video.unlink()
+            if Path("./test_motion_output").exists():
+                shutil.rmtree("./test_motion_output")
+            
+            progress(1.0, desc="✅ Motion extraction successful!")
+            
+            # Count motion frames
+            motion_files = list((final_motion_dir / "smplx_params").glob("*.json"))
+            frame_count = len(motion_files)
+            
+            return f"""✅ Successfully processed '{motion_name}'
+📁 Motion saved to: {final_motion_dir / "smplx_params"}
+🎬 Extracted {frame_count} motion frames
+📺 Video files: input_video.mp4 & samurai_visualize.mp4
+
+Ready to use in LHM! Your motion will appear as: {motion_name}""", self.get_processed_motions()
                 
         except subprocess.TimeoutExpired:
             return f"❌ Processing timed out for '{motion_name}'. Try with a shorter video.", self.get_processed_motions()
@@ -140,11 +170,21 @@ def create_gui():
                     - **Person visibility**: Full body should be visible (unless half-body mode)
                     - **Background**: Simple backgrounds work better
                     - **Motion**: Avoid very fast or erratic movements
+                    
+                    ### 🔧 What this does:
+                    
+                    1. Copies your video to working directory
+                    2. Runs pose estimation to extract motion
+                    3. Creates motion folder with proper structure:
+                       - `smplx_params/` (motion data)
+                       - `input_video.mp4`
+                       - `samurai_visualize.mp4`
+                    4. Makes it available in LHM interface
                     """)
             
             status_output = gr.Textbox(
                 label="Processing Status",
-                lines=5,
+                lines=8,
                 interactive=False
             )
         
@@ -186,26 +226,21 @@ def create_gui():
             2. Your processed motion will be available in the motion selection dropdown
             3. Upload a character image and generate your animation!
             
+            ### Expected Output Structure:
+            ```
+            train_data/motion_video/your_motion_name/
+            ├── input_video.mp4           # Original video
+            ├── samurai_visualize.mp4     # Copy for LHM
+            └── smplx_params/             # Motion data folder
+                ├── 00001.json            # Frame 1 motion
+                ├── 00002.json            # Frame 2 motion
+                └── ...                   # More frames
+            ```
+            
             ### Troubleshooting:
-            - **Processing fails**: Try a shorter video or check video quality
-            - **Motion not appearing**: Refresh the main LHM app or check the "Manage Processed Motions" tab
-            - **Half-body videos**: Always check the "Half-body video" option for upper-body-only content
-            
-            ## 📁 Default Output Structure:
-
-            The GUI saves processed motions to: `./train_data/motion_video/`
-            
-            This matches exactly where the main LHM gradio apps look for motions:
-            ```
-            train_data/motion_video/
-            ├── your_motion_name_1/
-            │   ├── input_video.mp4
-            │   └── smplx_params/           # <- Motion data LHM uses
-            ├── your_motion_name_2/
-            │   ├── input_video.mp4  
-            │   └── smplx_params/
-            └── ...
-            ```
+            - **No smplx_params folder**: Video processing failed, try shorter/clearer video
+            - **Motion not in LHM**: Restart LHM app or check motion folder structure
+            - **Processing timeout**: Video too long, try under 30 seconds
             """)
         
         # Event handlers
@@ -236,6 +271,6 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",  # Allow external connections
         server_port=7861,       # Different port from main LHM app
-        share=False,            # Set to True if you want a public gradio link
+        share=True,            # Set to True if you want a public gradio link
         show_error=True
     )
