@@ -44,11 +44,11 @@ class VideoMotionProcessor:
             
             progress(0.2, desc="Running pose estimation...")
             
-            # Use the exact command structure that worked before
+            # Use the correct argument name: --output_path instead of --output_dir
             cmd = [
                 "python", "./engine/pose_estimation/video2motion.py",
                 "--video_path", "1.mp4",
-                "--output_dir", "./test_motion_output/"
+                "--output_path", "./test_motion_output/"
             ]
             
             # Add half-body parameters if specified
@@ -72,6 +72,8 @@ class VideoMotionProcessor:
                 error_msg = f"❌ Motion processing failed for '{motion_name}'"
                 if result.stderr:
                     error_msg += f"\n\nError details:\n{result.stderr}"
+                if result.stdout:
+                    error_msg += f"\n\nOutput:\n{result.stdout}"
                 return error_msg, self.get_processed_motions()
             
             progress(0.8, desc="Setting up final motion folder...")
